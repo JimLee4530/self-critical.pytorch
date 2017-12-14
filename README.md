@@ -2,7 +2,7 @@
 
 This repository is my solution for ai challenger Image-Captioning(Chinese).
 
-This is based on ruotianluo's [self-critical.pytorch](https://github.com/ruotianluo/self-critical.pytorch)  repository. The modifications is:
+This is based on ruotianluo's [self-critical.pytorch](https://github.com/ruotianluo/self-critical.pytorch)  repository. 
 
 ## Requirements
 Python 2.7 (because there is no [AI_Challenger-caption-eval](https://github.com/AIChallenger/AI_Challenger/tree/master/Evaluation/caption_eval) version for python 3) PyTorch 0.3 (along with torchvision)

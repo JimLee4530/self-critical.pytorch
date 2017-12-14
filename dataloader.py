@@ -13,11 +13,32 @@ import torch.utils.data as data
 
 import multiprocessing
 
-def get_npy_data(ix, fc_file, att_file, use_att):
-    if use_att == True:
-        return (np.load(fc_file), np.load(att_file)['feat'], ix)
-    else:
-        return (np.load(fc_file), np.zeros((1,1,1)), ix)
+split_path = {
+    'train': 'train_20170902',
+    'val': 'validation_20170910',
+    'test': '',
+}
+
+def get_npy_data(opt, ix, fc_file, att_file, use_att):
+
+    att_feats = np.zeros((100, opt.att_feat_size))
+    # bbox_feats = np.zeros((100, 4))
+    fc_feats = np.zeros((opt.fc_feat_size))
+    # fc_feats = np.load(fc_file)['x']
+    # fc_feats = np.transpose(fc_feats, (1,2,0))  #fc_feats: 14,14,2048
+    t_att_dict = np.load(att_file)
+    t_att_feats = t_att_dict['x']
+    # t_att_bbox = t_att_dict['bbox']
+    num_bbox = t_att_dict['num_bbox']
+    t_att_feats = np.transpose(t_att_feats, (1,0))
+    att_feats[:num_bbox, :] = t_att_feats
+    # bbox_feats[:num_bbox, :] = t_att_bbox
+
+    return (fc_feats, att_feats, num_bbox, ix)
+    # if use_att == True:
+    #     return (np.load(fc_file), np.load(att_file)['feat'], ix)
+    # else:
+    #     return (np.load(fc_file), np.zeros((1,1,1)), ix)
 
 class DataLoader(data.Dataset):
 
@@ -47,6 +68,10 @@ class DataLoader(data.Dataset):
         self.ix_to_word = self.info['ix_to_word']
         self.vocab_size = len(self.ix_to_word)
         print('vocab size is ', self.vocab_size)
+
+        if self.opt.use_word2vector:
+            from gensim.models import Word2Vec
+            self.w2v_model = Word2Vec.load(opt.w2v_model_path)
         
         # open the hdf5 file
         print('DataLoader loading h5 file: ', opt.input_fc_dir, opt.input_att_dir, opt.input_label_h5)
@@ -67,13 +92,15 @@ class DataLoader(data.Dataset):
         print('read %d image features' %(self.num_images))
 
         # separate out indexes for each of the provided splits
-        self.split_ix = {'train': [], 'val': [], 'test': []}
+        self.split_ix = {'train': [], 'val': [], 'test': [], 'train+val': []}
         for ix in range(len(self.info['images'])):
             img = self.info['images'][ix]
             if img['split'] == 'train':
                 self.split_ix['train'].append(ix)
+                # self.split_ix['train+val'].append(ix)
             elif img['split'] == 'val':
                 self.split_ix['val'].append(ix)
+                # self.split_ix['train+val'].append(ix)
             elif img['split'] == 'test':
                 self.split_ix['test'].append(ix)
             elif opt.train_only == 0: # restval
@@ -83,7 +110,7 @@ class DataLoader(data.Dataset):
         print('assigned %d images to split val' %len(self.split_ix['val']))
         print('assigned %d images to split test' %len(self.split_ix['test']))
 
-        self.iterators = {'train': 0, 'val': 0, 'test': 0}
+        self.iterators = {'train': 0, 'val': 0, 'test': 0, 'train+val': 0}
         
         self._prefetch_process = {} # The three prefetch process
         for split in self.iterators.keys():
@@ -96,12 +123,32 @@ class DataLoader(data.Dataset):
         import atexit
         atexit.register(cleanup)
 
+    def get_img_num(self, split):
+        return len(self.split_ix[split])
+
+    '''
+    seq = np.zeros([seq_per_img, self.seq_length]
+    '''
+    # def seq2w2v(self, seq):
+    #     seq_per_img = seq.shape[0]
+    #
+    #     w2v = np.zeros([seq_per_img, self.seq_length+2], dtype = 'int')
+    #     for i in range(seq_per_img):
+    #         w2v[i, 0] = '<eos>'
+    #         for j in range(self.self_length):
+    #             w2v[i, j+1] = self.ix_to_word(str(int(seq[i,j])))
+
+
     def get_batch(self, split, batch_size=None, seq_per_img=None):
         batch_size = batch_size or self.batch_size
         seq_per_img = seq_per_img or self.seq_per_img
 
         fc_batch = [] # np.ndarray((batch_size * seq_per_img, self.opt.fc_feat_size), dtype = 'float32')
-        att_batch = [] # np.ndarray((batch_size * seq_per_img, 14, 14, self.opt.att_feat_size), dtype = 'float32')
+        att_batch = [] # batch_size * seq_per_img, 100, 2048
+        num_bbox = []   # batch_size * seq_per_img, 1
+        bbox = []
+        if self.opt.use_word2vector:
+            w2v_batch = np.zeros([batch_size * seq_per_img, self.seq_length + 2, 300], dtype = 'int')
         label_batch = np.zeros([batch_size * seq_per_img, self.seq_length + 2], dtype = 'int')
         mask_batch = np.zeros([batch_size * seq_per_img, self.seq_length + 2], dtype = 'float32')
 
@@ -114,10 +161,12 @@ class DataLoader(data.Dataset):
             import time
             t_start = time.time()
             # fetch image
-            tmp_fc, tmp_att,\
-                ix, tmp_wrapped = self._prefetch_process[split].get()
+            tmp_fc, tmp_att, tmp_num_bbox,\
+                ix, tmp_bbox, tmp_wrapped = self._prefetch_process[split].get()
             fc_batch += [tmp_fc] * seq_per_img
             att_batch += [tmp_att] * seq_per_img
+            num_bbox += [tmp_num_bbox] * seq_per_img
+            bbox += [tmp_bbox]
 
             # fetch the sequence labels
             ix1 = self.label_start_ix[ix] - 1 #label_start_ix starts from 1
@@ -136,6 +185,10 @@ class DataLoader(data.Dataset):
                 seq = self.h5_label_file['labels'][ixl: ixl + seq_per_img, :self.seq_length]
             
             label_batch[i * seq_per_img : (i + 1) * seq_per_img, 1 : self.seq_length + 1] = seq
+            if self.opt.use_word2vector:
+                pass
+                # w2v = self.seq2w2v(seq)
+                # w2v_batch[i * seq_per_img: (i + 1) * seq_per_img, :, :] = w2v
 
             if tmp_wrapped:
                 wrapped = True
@@ -161,6 +214,8 @@ class DataLoader(data.Dataset):
         data = {}
         data['fc_feats'] = np.stack(fc_batch)
         data['att_feats'] = np.stack(att_batch)
+        data['num_bbox'] = np.stack(num_bbox)
+        # data['bbox'] = np.stack(bbox)
         data['labels'] = label_batch
         data['gts'] = gts
         data['masks'] = mask_batch 
@@ -176,9 +231,10 @@ class DataLoader(data.Dataset):
         """This function returns a tuple that is further passed to collate_fn
         """
         ix = index #self.split_ix[index]
-        return get_npy_data(ix, \
-                os.path.join(self.input_fc_dir, str(self.info['images'][ix]['id']) + '.npy'),
-                os.path.join(self.input_att_dir, str(self.info['images'][ix]['id']) + '.npz'),
+        split = self.info['images'][ix]['split']
+        return get_npy_data(self.opt, ix, \
+                os.path.join(self.input_fc_dir, split_path[split], 'res101/res5c', str(self.info['images'][ix]['id']) + '.npz'),
+                os.path.join(self.input_att_dir, split_path[split], 'faster_rcnn_pool5_features', str(self.info['images'][ix]['id']) + '.npz'),
                 self.use_att
                 )
 
@@ -237,6 +293,6 @@ class BlobFetcher():
         if wrapped:
             self.reset()
 
-        assert tmp[2] == ix, "ix not equal"
+        assert tmp[3] == ix, "ix not equal"
 
         return tmp + [wrapped]

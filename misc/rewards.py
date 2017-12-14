@@ -14,11 +14,12 @@ sys.path.append("cider")
 from pyciderevalcap.ciderD.ciderD import CiderD
 
 CiderD_scorer = None
+# CiderD_scorer = CiderD(df='coco-train-idxs')
 #CiderD_scorer = CiderD(df='corpus')
 
 def init_cider_scorer(cached_tokens):
     global CiderD_scorer
-    CiderD_scorer = CiderD_scorer or CiderD(df=cached_tokens)
+    CiderD_scorer = CiderD(df=cached_tokens)
 
 def array_to_str(arr):
     out = ''
@@ -28,12 +29,13 @@ def array_to_str(arr):
             break
     return out.strip()
 
-def get_self_critical_reward(model, fc_feats, att_feats, data, gen_result):
+def get_self_critical_reward(model, fc_feats, att_feats, num_bbox, bbox,  data, gen_result):
     batch_size = gen_result.size(0)# batch_size = sample_size * seq_per_img
     seq_per_img = batch_size // len(data['gts'])
     
     # get greedy decoding baseline
-    greedy_res, _ = model.sample(Variable(fc_feats.data, volatile=True), Variable(att_feats.data, volatile=True))
+    # greedy_res, _ = model.sample(Variable(fc_feats.data, volatile=True), Variable(att_feats.data, volatile=True))
+    greedy_res, _ = model.sample(Variable(fc_feats.data, volatile=True), Variable(att_feats.data, volatile=True), Variable(bbox.data, volatile=True), Variable(num_bbox.data, volatile=True))
 
     res = OrderedDict()
     

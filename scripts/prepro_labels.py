@@ -48,7 +48,7 @@ def build_vocab(imgs, params):
   for img in imgs:
     for sent in img['sentences']:
       for w in sent['tokens']:
-        counts[w] = counts.get(w, 0) + 1
+        counts[w] = counts.get(w, 0) + 1 
   cw = sorted([(count,w) for w,count in counts.items()], reverse=True)
   print('top words and their counts:')
   print('\n'.join(map(str,cw[:20])))
